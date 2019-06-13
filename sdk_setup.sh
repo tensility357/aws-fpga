@@ -27,23 +27,21 @@ script_name=$(basename $full_script)
 script_dir=$(dirname $full_script)
 current_dir=$(pwd)
 
-source $script_dir/shared/bin/message_functions.sh
+source $script_dir/shared/bin/set_common_functions.sh
+source $script_dir/shared/bin/set_common_env_vars.sh
 
-source $script_dir/shared/bin/set_AWS_FPGA_REPO_DIR.sh
+sudo rm -f /tmp/sdk_root_env.exp
+typeset -f allow_non_root > /tmp/sdk_root_env.exp
+echo "export AWS_FPGA_SDK_GROUP=${AWS_FPGA_SDK_GROUP}" >> /tmp/sdk_root_env.exp
+echo "export SDK_NON_ROOT_USER=${SDK_NON_ROOT_USER}" >> /tmp/sdk_root_env.exp
+echo "export AWS_FPGA_SDK_OVERRIDE_GROUP=${AWS_FPGA_SDK_OVERRIDE_GROUP}" >> /tmp/sdk_root_env.exp
+sudo chown root:root /tmp/sdk_root_env.exp
+sudo chmod 700 /tmp/sdk_root_env.exp
 
-export SDK_DIR=${SDK_DIR:=$script_dir/sdk}
-
-# Update PYTHONPATH with libraries used for unit testing
-python_lib=$AWS_FPGA_REPO_DIR/shared/lib
-export PYTHONPATH=$(echo $PATH | sed -e 's/\(^\|:\)[^:]\+$python_lib\(:\|$\)/:/g; s/^://; s/:$//')
-PYTHONPATH=$python_lib:$PYTHONPATH
-
-echo "Done setting environment variables."
-
-# 
+#
 # Execute sdk_install.sh inside a subshell so the user's current
 # shell does not exit on errors from the install.
-# 
+#
 cd $script_dir
 if ! bash $SDK_DIR/sdk_install.sh; then
     echo "Error: AWS SDK install was unsuccessful, sdk_install.sh returned $?"

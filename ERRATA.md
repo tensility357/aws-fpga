@@ -1,29 +1,27 @@
 
 # AWS EC2 FPGA HDK+SDK Errata
 
+## Shell v1.4 (04261818)
+[Shell\_04261818_Errata](./hdk/docs/AWS_Shell_ERRATA.md)
 
-## Release 1.3.0 
-### Implementation Restrictions
-*    PCIE AXI4 interfaces between Custom Logic(CL) and Shell(SH) have following restrictions:
-    *    All PCIe transactions must adhere to the PCIe Exress base spec
-    *    4Kbyte Address boundary for all transactions(PCIe restriction)
-    *    Multiple outstanding outbound PCIe Read transactions with same ID not supported
-    *    PCIE extended tag not supported, so read-request is limited to 32 outstanding
-    *    Address must match DoubleWord(DW) address of the transaction
-    *    WSTRB(write strobe) must reflect appropriate valid bytes for AXI write beats
-    *    Only Increment burst type is supported
-    *    AXI lock, memory type, protection type, Quality of service and Region identifier are not supported
-    *    Transactions from the Shell to CL must complete within the timeout period to avoid transaction termination by the Shell
-    *    DMA transactions from the Shell to CL must complete within the timeout period to avoid transaction termination and invalid data returned for the DMA transaction
+## HDK
+* Multiple SDE instances per CL is not supported in this release.  Support planned for future release.
+* DRAM Data retention is not supported for CL designs with less than 4 DDRs enabled
+* Combinatorial loops in CL designs are not supported.
+* [Automatic Traffic Generator (ATG)](./hdk/cl/examples/cl_dram_dma/design/cl_tst.sv) in SYNC mode does not wait for write response transaction before issuing read transactions. The fix for this issue is planned in a future release.
 
-## Unsupported Features (Planned for future releases)
-* FPGA to FPGA communication over PCIe for F1.16xl
-* FPGA to FPGA over the 400Gbps Ring for F1.16xl
-* Aurora and Reliabile Aurora modules for the FPGA-to-FPGA 
-* Preserving the DRAM content between different AFI loads (by the same running instance)
-* Cadence RTL simulations tools
-* PCIM and DMA-PCIS AXI-4 interfaces do not support AxSIZE other than 3'b110 (64B)
+## SDK
 
-## Known Bugs/Issues
+## SDAccel (For additional restrictions see [SDAccel ERRATA](./SDAccel/ERRATA.md))
+* Virtual Ethernet is not supported when using SDAccel
+* DRAM Data retention is not supported for kernels that provision less than 4 DDRs
+* Combinatorial loops in CL designs are not supported.
+* When using [Xilinx runtime(XRT) version 2018.3.3.1](https://github.com/Xilinx/XRT/releases/tag/2018.3.3.1) or [AWS FPGA Developer AMI Version 1.6.0](https://aws.amazon.com/marketplace/pp/B06VVYBLZZ) your host application could fail with following error:
+   
+   ```
+   : symbol lookup error: /opt/xilinx/xrt/lib/libxrt_aws.so: undefined symbol: uuid_parse!
 
-
+   ```  
+   The SDAccel examples included in the developer kit use a SDAccel configuration file [sdaccel.ini]. To workaround this error please copy the SDAccel configuration file [sdaccel.ini](SDAccel/examples/aws/helloworld_ocl_runtime/sdaccel.ini) to your executable directory and try executing your application again.
+   AWS is working with Xilinx to release a XRT patch to fix this issue.
+   

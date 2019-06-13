@@ -26,6 +26,10 @@ else
 	CONFIG_LOGLEVEL=$LOGLEVEL
 fi
 
+if allow_non_root ; then
+       OPT="$OPT -DFPGA_ALLOW_NON_ROOT=1"
+fi
+
 #
 # gcc optimizations
 #OPT="-O3 -fno-strict-aliasing"
@@ -42,6 +46,9 @@ else
 	FPGA_PCI_BARS_MAX=$FPGA_PCI_BARS_MAX
 fi
 
+# get the HDK/SDK version number
+source $TOP/../../hdk/hdk_version.txt
+
 function build_exec {
 	cd $TOP/$BUILD_DIR 
 	echo "Entering $TOP/$BUILD_DIR"
@@ -56,7 +63,7 @@ function build_exec {
 		echo "make clean failed"
 		exit 1
 	fi
-	make OPT="$OPT -DCONFIG_LOGLEVEL="$CONFIG_LOGLEVEL" -DFPGA_PCI_BARS_MAX="$FPGA_PCI_BARS_MAX""
+	make OPT="$OPT -DCONFIG_LOGLEVEL="$CONFIG_LOGLEVEL" -DFPGA_PCI_BARS_MAX="$FPGA_PCI_BARS_MAX" -DCLI_VERSION='\"$HDK_VERSION\"'"
 	RET=$?
 	if [ $RET -ne 0 ]; then
 		echo "make failed"
@@ -70,6 +77,9 @@ BUILD_DIR="utils"
 build_exec
 
 BUILD_DIR="fpga_libs/fpga_pci"
+build_exec
+
+BUILD_DIR="fpga_libs/fpga_dma"
 build_exec
 
 BUILD_DIR="fpga_libs/fpga_mgmt"

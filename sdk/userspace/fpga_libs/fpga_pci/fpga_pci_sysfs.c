@@ -27,11 +27,18 @@
 #include <stdio.h>
 #include <getopt.h>
 #include <dirent.h>
+#include <pthread.h>
 
 static int fpga_pci_rescan(void);
-static int fpga_pci_check_app_pf(struct fpga_pci_resource_map *app_map, 
+static int fpga_pci_check_app_pf(struct fpga_pci_resource_map *app_map,
 	bool exists);
 static int fpga_pci_check_app_pf_sysfs(char *dir_name, bool exists);
+
+#if !defined(_BSD_SOURCE) && !defined(_SVID_SOURCE)
+pthread_mutex_t fpga_pci_readdir_mutex = PTHREAD_MUTEX_INITIALIZER;
+#else
+#define FPGA_PCI_USE_READDIR_R
+#endif
 
 /**
  * Return the ID from the given sysfs file (e.g. Vendor ID, Device ID).
@@ -46,12 +53,13 @@ static int fpga_pci_check_app_pf_sysfs(char *dir_name, bool exists);
 static int
 fpga_pci_get_id(char *path, uint16_t *id)
 {
-	fail_on(!path, err, "path is NULL");
-	fail_on(!id, err, "id is NULL");
-
 	int ret = 0;
+
+	fail_on_with_code(!path, err, ret, FPGA_ERR_SOFTWARE_PROBLEM, "path is NULL");
+	fail_on_with_code(!id, err, ret, FPGA_ERR_SOFTWARE_PROBLEM, "id is NULL");
+
 	FILE *fp = fopen(path, "r");
-	fail_on_quiet(!fp, err, "Error opening %s", path);
+	fail_on_quiet((ret = (!fp) ? -errno: 0), err, "Error opening %s", path);
 
 	uint32_t tmp_id;
 	ret = fscanf(fp, "%x", &tmp_id);
@@ -64,9 +72,10 @@ fpga_pci_get_id(char *path, uint16_t *id)
 
 err_close:
 	fclose(fp);
+	ret = FPGA_ERR_UNRESPONSIVE; /* couldn't parse the id */
 err:
 	errno = 0;
-	return FPGA_ERR_FAIL;
+	return ret;
 }
 
 /**
@@ -111,23 +120,26 @@ err:
 static int
 fpga_pci_get_dbdf(char *dir_name, struct fpga_pci_resource_map *map)
 {
-	fail_on(!dir_name, err, "dir_name is NULL");
-	fail_on(!map, err, "map is NULL");
+	int ret = 0;
+	fail_on_with_code(!dir_name, err, ret, FPGA_ERR_SOFTWARE_PROBLEM,
+		"dir_name is NULL");
+	fail_on_with_code(!map, err, ret, FPGA_ERR_SOFTWARE_PROBLEM, "map is NULL");
 
 	uint32_t domain;
 	uint32_t bus;
 	uint32_t dev;
 	int func;
-	int ret = sscanf(dir_name, PCI_DEV_FMT, &domain, &bus, &dev, &func);
-	fail_on(ret != 4, err, "sscanf failed for DBDF");
+	ret = sscanf(dir_name, PCI_DEV_FMT, &domain, &bus, &dev, &func);
+	fail_on_with_code(ret != 4, err, ret, FPGA_ERR_SOFTWARE_PROBLEM,
+		"sscanf failed for DBDF");
 
 	map->domain = domain;
 	map->bus = bus;
 	map->dev = dev;
 	map->func = func;
-	return 0;
+	ret = 0;
 err:
-	return FPGA_ERR_FAIL;
+	return ret;
 }
 
 /**
@@ -137,7 +149,7 @@ err:
  * @param[in]		dir_name		the PCI device directory name
  * @param[in]		resource_num	the resource number
  * @param[in,out]   resource_size	the returned resource size
- * @param[in,out]   burstable		the returned resource burstable flag 
+ * @param[in,out]   burstable		the returned resource burstable flag
  *
  * @returns
  *  0	on success
@@ -147,25 +159,33 @@ static int
 fpga_pci_get_pci_resource_info(char *dir_name,
 		uint8_t resource_num, uint64_t *resource_size, bool *burstable)
 {
-	int ret;
+	int ret, err_rc;
 
-	fail_on(!dir_name, err, "dir_name is NULL");
-	fail_on(!resource_size, err, "resource_size is NULL");
+	err_rc = 0;
+
+	fail_on_with_code(!dir_name, err, err_rc, FPGA_ERR_SOFTWARE_PROBLEM,
+		"dir_name is NULL");
+	fail_on_with_code(!resource_size, err, err_rc, FPGA_ERR_SOFTWARE_PROBLEM,
+		"resource_size is NULL");
+	fail_on_with_code(!burstable, err, err_rc, FPGA_ERR_SOFTWARE_PROBLEM,
+		"burstable is NULL");
 
 	char sysfs_name[NAME_MAX + 1];
 	ret = snprintf(sysfs_name, sizeof(sysfs_name),
 			"/sys/bus/pci/devices/%s/resource%u", dir_name,
 			resource_num);
 
-	fail_on(ret < 0, err, "Error building the sysfs path for resource%u",
-			resource_num);
-	fail_on((size_t) ret >= sizeof(sysfs_name), err,
-			"sysfs path too long for resource%u", resource_num);
+	fail_on_with_code(ret < 0, err, err_rc, FPGA_ERR_SOFTWARE_PROBLEM,
+		"Error building the sysfs path for resource%u", resource_num);
+	fail_on_with_code((size_t) ret >= sizeof(sysfs_name), err, err_rc,
+		FPGA_ERR_SOFTWARE_PROBLEM,
+		"sysfs path too long for resource%u", resource_num);
 
 	/** Check for file existence, obtain the file size */
 	struct stat file_stat;
 	ret = stat(sysfs_name, &file_stat);
-	fail_on_quiet(ret != 0, err, "stat failed, path=%s", sysfs_name);
+	fail_on_quiet(err_rc = (ret != 0) ? FPGA_ERR_PCI_MISSING : 0, err,
+		"stat failed, path=%s", sysfs_name);
 
 	*resource_size = file_stat.st_size;
 
@@ -173,27 +193,26 @@ fpga_pci_get_pci_resource_info(char *dir_name,
 			"/sys/bus/pci/devices/%s/resource%u_wc", dir_name,
 			resource_num);
 
-	fail_on(ret < 0, err, "Error building the sysfs path for resource%u",
-			resource_num);
-	fail_on((size_t) ret >= sizeof(sysfs_name), err,
-			"sysfs path too long for resource%u", resource_num);
+	fail_on_with_code(ret < 0, err, err_rc, FPGA_ERR_SOFTWARE_PROBLEM,
+		"Error building the sysfs path for resource%u", resource_num);
+	fail_on_with_code((size_t) ret >= sizeof(sysfs_name), err, err_rc,
+		FPGA_ERR_SOFTWARE_PROBLEM,
+		"sysfs path too long for resource%u", resource_num);
 
 	memset(&file_stat, 0, sizeof(struct stat));
 	ret = stat(sysfs_name, &file_stat);
 	*burstable = (ret == 0);
 
-	errno = 0;
-	return 0;
 err:
 	errno = 0;
-	return FPGA_ERR_FAIL;
+	return err_rc;
 }
 
 /**
  * Return the PCI resources for the given sysfs directory name.
  *
  * @param[in]		dir_name	the PCI device directory name
- * @param[in,out]	map			the PCI resource map 
+ * @param[in,out]	map			the PCI resource map
  *
  * @returns
  *  0	on success
@@ -203,6 +222,7 @@ static int
 fpga_pci_get_resources(char *dir_name, struct fpga_pci_resource_map *map)
 {
 	int ret;
+	bool found_one_device = false;
 	static const uint8_t resource_nums[4] = {0, 1, 2, 4};
 
 	for (unsigned int i = 0; i < sizeof_array(resource_nums); ++i) {
@@ -215,13 +235,17 @@ fpga_pci_get_resources(char *dir_name, struct fpga_pci_resource_map *map)
 		ret = fpga_pci_get_pci_resource_info(dir_name, resource_num,
 		                                     &resource_size,
 		                                     &burstable);
-		if (ret) {
+		if (ret == FPGA_ERR_PCI_MISSING) {
 			log_debug("Unable to read resource information for %d", resource_num);
+		} else if (ret != 0) {
+			return ret;
+		} else {
+			map->resource_size[resource_num] = resource_size;
+			map->resource_burstable[resource_num] = burstable;
+			found_one_device = true;
 		}
-		map->resource_size[resource_num] = resource_size;
-		map->resource_burstable[resource_num] = burstable;
 	}
-	return 0;
+	return (found_one_device) ? 0 : FPGA_ERR_PCI_MISSING;
 }
 
 
@@ -229,7 +253,7 @@ fpga_pci_get_resources(char *dir_name, struct fpga_pci_resource_map *map)
  * Return the PCI resource map identifiers for the given sysfs directory name.
  *
  * @param[in]		dir_name	the PCI device directory name
- * @param[in,out]	map			the PCI resource map 
+ * @param[in,out]	map			the PCI resource map
  *
  * @returns
  *  0	on success
@@ -238,20 +262,24 @@ fpga_pci_get_resources(char *dir_name, struct fpga_pci_resource_map *map)
 static int
 fpga_pci_get_resource_map_ids(char *dir_name, struct fpga_pci_resource_map *map)
 {
+	int ret = 0;
 	uint16_t vendor_id = 0;
 	uint16_t device_id = 0;
 	uint16_t subsystem_vendor_id = 0;
 	uint16_t subsystem_device_id = 0;
 
-	fail_on(!dir_name, err, "dir_name is NULL");
+	fail_on_with_code(!dir_name, err, ret, FPGA_ERR_SOFTWARE_PROBLEM,
+		"dir_name is NULL");
 
 	/** Setup and read the PCI Vendor ID */
 	char sysfs_name[NAME_MAX + 1];
-	int ret = snprintf(sysfs_name, sizeof(sysfs_name),
+	ret = snprintf(sysfs_name, sizeof(sysfs_name),
 			"/sys/bus/pci/devices/%s/vendor", dir_name);
 
-	fail_on(ret < 0, err, "Error building the sysfs path for vendor");
-	fail_on((size_t) ret >= sizeof(sysfs_name), err, "sysfs path too long for vendor");
+	fail_on_with_code(ret < 0, err, ret, FPGA_ERR_SOFTWARE_PROBLEM,
+		"Error building the sysfs path for vendor");
+	fail_on_with_code((size_t) ret >= sizeof(sysfs_name), err, ret,
+		FPGA_ERR_SOFTWARE_PROBLEM, "sysfs path too long for vendor");
 
 	ret = fpga_pci_get_id(sysfs_name, &vendor_id);
 	fail_on_quiet(ret != 0, err, "Error retrieving vendor_id");
@@ -260,8 +288,10 @@ fpga_pci_get_resource_map_ids(char *dir_name, struct fpga_pci_resource_map *map)
 	ret = snprintf(sysfs_name, sizeof(sysfs_name),
 			"/sys/bus/pci/devices/%s/device", dir_name);
 
-	fail_on(ret < 0, err, "Error building the sysfs path for device");
-	fail_on((size_t) ret >= sizeof(sysfs_name), err, "sysfs path too long for device");
+	fail_on_with_code(ret < 0, err, ret, FPGA_ERR_SOFTWARE_PROBLEM,
+		"Error building the sysfs path for device");
+	fail_on_with_code((size_t) ret >= sizeof(sysfs_name), err, ret,
+		FPGA_ERR_SOFTWARE_PROBLEM, "sysfs path too long for device");
 
 	ret = fpga_pci_get_id(sysfs_name, &device_id);
 	fail_on_quiet(ret != 0, err, "Error retrieving device_id");
@@ -270,8 +300,10 @@ fpga_pci_get_resource_map_ids(char *dir_name, struct fpga_pci_resource_map *map)
 	ret = snprintf(sysfs_name, sizeof(sysfs_name),
 			"/sys/bus/pci/devices/%s/subsystem_vendor", dir_name);
 
-	fail_on(ret < 0, err, "Error building the sysfs path for subsystem_vendor");
-	fail_on((size_t) ret >= sizeof(sysfs_name), err, "sysfs path too long for subsystem_vendor");
+	fail_on_with_code(ret < 0, err, ret, FPGA_ERR_SOFTWARE_PROBLEM,
+		"Error building the sysfs path for subsystem_vendor");
+	fail_on_with_code((size_t) ret >= sizeof(sysfs_name), err, ret,
+		FPGA_ERR_SOFTWARE_PROBLEM, "sysfs path too long for subsystem_vendor");
 
 	ret = fpga_pci_get_id(sysfs_name, &subsystem_vendor_id);
 	fail_on_quiet(ret != 0, err, "Error retrieving subsystem_vendor");
@@ -280,8 +312,10 @@ fpga_pci_get_resource_map_ids(char *dir_name, struct fpga_pci_resource_map *map)
 	ret = snprintf(sysfs_name, sizeof(sysfs_name),
 			"/sys/bus/pci/devices/%s/subsystem_device", dir_name);
 
-	fail_on(ret < 0, err, "Error building the sysfs path for subsystem_device");
-	fail_on((size_t) ret >= sizeof(sysfs_name), err, "sysfs path too long for subsystem_device");
+	fail_on_with_code(ret < 0, err, ret, FPGA_ERR_SOFTWARE_PROBLEM,
+		"Error building the sysfs path for subsystem_device");
+	fail_on_with_code((size_t) ret >= sizeof(sysfs_name), err, ret,
+		FPGA_ERR_SOFTWARE_PROBLEM, "sysfs path too long for subsystem_device");
 
 	ret = fpga_pci_get_id(sysfs_name, &subsystem_device_id);
 	fail_on_quiet(ret != 0, err, "Error retrieving subsystem_device");
@@ -297,9 +331,9 @@ fpga_pci_get_resource_map_ids(char *dir_name, struct fpga_pci_resource_map *map)
 	map->subsystem_vendor_id = subsystem_vendor_id;
 	map->subsystem_device_id = subsystem_device_id;
 
-	return 0;
+	ret = 0;
 err:
-	return FPGA_ERR_FAIL;
+	return ret;
 }
 
 /**
@@ -317,62 +351,97 @@ err:
  * -1	on failure
  */
 static int
-fpga_pci_mbox2app(struct fpga_pci_resource_map *mbox_map, 
+fpga_pci_mbox2app(struct fpga_pci_resource_map *mbox_map,
 		struct fpga_pci_resource_map *app_map,
 		char *app_dir_name, size_t app_dir_name_size)
 {
-	fail_on(!mbox_map || !app_map || !app_dir_name || !app_dir_name_size, 
-			err, "Invalid input parameters");
+	int ret = 0;
+
+	fail_on_with_code(!mbox_map || !app_map || !app_dir_name || !app_dir_name_size,
+		err, ret, FPGA_ERR_SOFTWARE_PROBLEM, "Invalid input parameters");
 
 	/** Construct the app dir name based on the mbox_map */
-	int ret = snprintf(app_dir_name, app_dir_name_size, PCI_DEV_FMT, 
-			mbox_map->domain, mbox_map->bus, 
+	ret = snprintf(app_dir_name, app_dir_name_size, PCI_DEV_FMT,
+			mbox_map->domain, mbox_map->bus,
 			F1_MBOX_DEV2APP_DEV(mbox_map->dev), mbox_map->func);
 
-	fail_on(ret < 0, err, "Error building the app_dir_name");
-	fail_on((size_t) ret >= app_dir_name_size, err, "app_dir_name too long");
+	fail_on_with_code(ret < 0, err, ret, FPGA_ERR_SOFTWARE_PROBLEM,
+		"Error building the app_dir_name");
+	fail_on_with_code((size_t) ret >= app_dir_name_size, err, ret,
+		FPGA_ERR_SOFTWARE_PROBLEM, "app_dir_name too long");
 
-	/** 
-	 * Check that the app_pf exists.  If not found, make a minimal attempt to 
+	/**
+	 * Check that the app_pf exists.  If not found, make a minimal attempt to
 	 * recover it.
 	 */
 	ret = fpga_pci_check_app_pf_sysfs(app_dir_name, true); /** exists==true*/
 	fail_on(ret != 0, err, "fpga_pci_check_app_pf_sysfs failed");
 
 	/**
-	 * Fill in the app_map for the given app_dir_name.  If the app_dir_name is 
-	 * not yet ready (e.g. sysfs files are in the process of being recreated 
+	 * Fill in the app_map for the given app_dir_name.  If the app_dir_name is
+	 * not yet ready (e.g. sysfs files are in the process of being recreated
 	 * due to a remove/rescan) make a minimal retry attempt.
 	 */
 	bool done = false;
 	uint32_t retries = 0;
 	while (!done) {
-		ret = fpga_pci_get_resource_map_ids(app_dir_name, app_map); 
+		ret = fpga_pci_get_resource_map_ids(app_dir_name, app_map);
 		if (ret == 0) {
 			done = true;
-		} else { 
-			fail_on(retries >= F1_CHECK_APP_PF_MAX_RETRIES, err,
-				"fpga_pci_get_resource_map_ids failed for app_dir_name=%s", 
+		} else {
+			fail_on_with_code(retries >= F1_CHECK_APP_PF_MAX_RETRIES, err, ret,
+				FPGA_ERR_UNRESPONSIVE,
+				"fpga_pci_get_resource_map_ids failed for app_dir_name=%s",
 				app_dir_name);
 			msleep(F1_CHECK_APP_PF_DELAY_MSEC);
 			retries++;
 		}
 	}
 
-	return 0;
+	ret = 0;
 err:
-	return FPGA_ERR_FAIL;
+	return ret;
+}
+
+int fpga_acquire_readdir_lock() {
+#if !defined(FPGA_PCI_USE_READDIR_R)
+  return pthread_mutex_lock(&fpga_pci_readdir_mutex);
+#else
+  return 0;
+#endif
+}
+
+int fpga_release_readdir_lock() {
+#if !defined(FPGA_PCI_USE_READDIR_R)
+  return pthread_mutex_unlock(&fpga_pci_readdir_mutex);
+#else
+  return 0;
+#endif
 }
 
 int
 fpga_pci_get_all_slot_specs(struct fpga_slot_spec spec_array[], int size)
 {
+	int ret;
 	bool found_afi_slot = false;
 	char *path = "/sys/bus/pci/devices";
 	DIR *dirp = opendir(path);
 	fail_on(!dirp, err, "opendir failed for path=%s", path);
 
-	struct dirent entry, *result;
+	struct dirent *entry;
+#if defined(FPGA_PCI_USE_READDIR_R)
+	struct dirent entry_stack, *result;
+	entry = &entry_stack;
+	memset(entry, 0, sizeof(struct dirent));
+#else
+	/**
+	 * Protect calls to readdir with a mutex because multiple threads may call
+	 * this function, which always reads from the same directory. The man page
+	 * for readdir says the POSIX spec does not require threadsafety.
+	 */
+	fpga_acquire_readdir_lock();
+#endif
+
 	int slot_dev_index = 0;
 	struct fpga_slot_spec search_spec;
 	struct fpga_pci_resource_map search_map, app_map;
@@ -380,45 +449,54 @@ fpga_pci_get_all_slot_specs(struct fpga_slot_spec spec_array[], int size)
 
 	memset(&search_spec, 0, sizeof(struct fpga_slot_spec));
 
-	/** 
+	/**
 	 * Loop through the sysfs device directories
 	 * -we first find the mbox dev then handle the app dev as a fixed
-	 *  mapping based off of the mbox dev's pci resource map 
+	 *  mapping based off of the mbox dev's pci resource map
 	 *  (see fpga_pci_mbox2app).
 	 * -this approach is simple and more efficient than the
 	 *  alternative of requiring an additional sort of the dirent entries by
 	 *  the PCI device number (DBDF).
 	 */
 	while (true) {
-		memset(&entry, 0, sizeof(struct dirent));
-		readdir_r(dirp, &entry, &result);
+
+#if defined(FPGA_PCI_USE_READDIR_R)
+		memset(entry, 0, sizeof(struct dirent));
+		readdir_r(dirp, entry, &result);
 		if (result == NULL) {
 			/** No more directories */
 			break;
 		}
+#else
+		entry = readdir(dirp);
+		if (entry == NULL) {
+			/** No more directories */
+			break;
+		}
+#endif
 
 		/** Handle the current directory entry */
 		memset(&search_map, 0, sizeof(struct fpga_pci_resource_map));
-		int ret = fpga_pci_get_resource_map_ids(entry.d_name, &search_map);
+		ret = fpga_pci_get_resource_map_ids(entry->d_name, &search_map);
 		if (ret != 0) {
 			continue;
 		}
 
-		if (search_map.vendor_id == F1_MBOX_VENDOR_ID && 
+		if (search_map.vendor_id == F1_MBOX_VENDOR_ID &&
 			search_map.device_id == F1_MBOX_DEVICE_ID) {
 			/* mbox resources */
-			ret = fpga_pci_get_resources(entry.d_name, &search_map);
-			fail_on(ret != 0, err, "Error retrieving resource information");
+			ret = fpga_pci_get_resources(entry->d_name, &search_map);
+			fail_on(ret != 0, err_unlock, "Error retrieving resource information");
 
 			/* app resources */
 			memset(&app_map, 0, sizeof(struct fpga_pci_resource_map));
 			app_dir_name[0] = 0;
-			ret = fpga_pci_mbox2app(&search_map, &app_map, 
+			ret = fpga_pci_mbox2app(&search_map, &app_map,
 				app_dir_name, sizeof(app_dir_name));
-			fail_on(ret != 0, err, "Error retrieving app pf information");
+			fail_on(ret != 0, err_unlock, "Error retrieving app pf information");
 
 			ret = fpga_pci_get_resources(app_dir_name, &app_map);
-			fail_on(ret != 0, err, "Error retrieving resource information");
+			fail_on(ret != 0, err_unlock, "Error retrieving resource information");
 
 			/* copy the results into the spec_array */
 			spec_array[slot_dev_index].map[FPGA_APP_PF] = app_map;
@@ -431,19 +509,28 @@ fpga_pci_get_all_slot_specs(struct fpga_slot_spec spec_array[], int size)
 			}
 		}
 	}
-
-	fail_on(!found_afi_slot, err, "No fpga-image-slots found");
+#if !defined(FPGA_PCI_USE_READDIR_R)
+	fpga_release_readdir_lock();
+#endif
+	fail_on_with_code(!found_afi_slot, err, ret, FPGA_ERR_PCI_MISSING,
+		"No fpga-image-slots found");
 
 	closedir(dirp);
 
 	errno = 0;
 	return 0;
+
+err_unlock:
+#if !defined(FPGA_PCI_USE_READDIR_R)
+	fpga_release_readdir_lock();
+#endif
+
 err:
 	if (dirp) {
 		closedir(dirp);
 	}
 	errno = 0;
-	return FPGA_ERR_FAIL;
+	return ret;
 }
 
 int
@@ -472,7 +559,7 @@ fpga_pci_get_slot_spec(int slot_id, struct fpga_slot_spec *spec)
 	*spec = spec_array[slot_id];
 	return 0;
 err:
-	return FPGA_ERR_FAIL;
+	return ret;
 }
 
 int
@@ -511,26 +598,32 @@ static int
 fpga_pci_check_app_pf_driver(struct fpga_pci_resource_map *app_map,
     bool *attached)
 {
-	fail_on(!app_map, err, "app_map is NULL");
-	fail_on(!attached, err, "attached is NULL");
+	int ret = 0;
+
+	fail_on_with_code(!app_map, err, ret, FPGA_ERR_SOFTWARE_PROBLEM,
+		"app_map is NULL");
+	fail_on_with_code(!attached, err, ret, FPGA_ERR_SOFTWARE_PROBLEM,
+		"attached is NULL");
 
 	/** Construct the PCI device directory name using the PCI_DEV_FMT */
 	char dir_name[NAME_MAX + 1];
-	int ret = snprintf(dir_name, sizeof(dir_name), PCI_DEV_FMT,
+	ret = snprintf(dir_name, sizeof(dir_name), PCI_DEV_FMT,
 		app_map->domain, app_map->bus, app_map->dev, app_map->func);
 
-	fail_on(ret < 0, err, "Error building the dir_name");
-	fail_on((size_t) ret >= sizeof(dir_name), err, "dir_name too long");
+	fail_on_with_code(ret < 0, err, ret, FPGA_ERR_SOFTWARE_PROBLEM,
+		"Error building the dir_name");
+	fail_on_with_code((size_t) ret >= sizeof(dir_name), err, ret,
+		FPGA_ERR_SOFTWARE_PROBLEM, "dir_name too long");
 
 	/** Setup the path to the app_pf */
 	char sysfs_name[NAME_MAX + 1];
 	ret = snprintf(sysfs_name, sizeof(sysfs_name),
 		"/sys/bus/pci/devices/%s/driver", dir_name);
 
-	fail_on(ret < 0, err,
+	fail_on_with_code(ret < 0, err, ret, FPGA_ERR_SOFTWARE_PROBLEM,
 		"Error building the sysfs path for app_pf");
-	fail_on((size_t) ret >= sizeof(sysfs_name), err,
-		"sysfs path too long for app_pf");
+	fail_on_with_code((size_t) ret >= sizeof(sysfs_name), err, ret,
+		FPGA_ERR_SOFTWARE_PROBLEM, "sysfs path too long for app_pf");
 
 	log_debug("Checking path=%s for existence", sysfs_name);
 
@@ -541,38 +634,39 @@ fpga_pci_check_app_pf_driver(struct fpga_pci_resource_map *app_map,
 	/** Setup for return */
 	*attached = (ret == 0) ? true : false;
 
-	errno = 0;
-	return 0;
+	ret = 0;
 err:
 	errno = 0;
-	return FPGA_ERR_FAIL;
+	return ret;
 }
 
 /**
- * Check that the application PF exists or not based on the dir_name and 
+ * Check that the application PF exists or not based on the dir_name and
  * exists flag.  If the application PF is supposed to exist but was not
  * found, perform a minimal attempt at recovery be performing a PCI rescan.
- *  
- * @param[in]	dir_name	the application PF device directory name 
- * @param[in]	exists		flag to check existence or non-existence		
- *  
+ *
+ * @param[in]	dir_name	the application PF device directory name
+ * @param[in]	exists		flag to check existence or non-existence
+ *
  * @returns
  *  0   on success, non-zero on error
- */         
+ */
 static int
 fpga_pci_check_app_pf_sysfs(char *dir_name, bool exists)
 {
+	int ret = 0;
+
 	fail_on(!dir_name, err, "dir_name is NULL");
 
 	/** Setup the path to the app_pf */
 	char sysfs_name[NAME_MAX + 1];
-	int ret = snprintf(sysfs_name, sizeof(sysfs_name),
+	ret = snprintf(sysfs_name, sizeof(sysfs_name),
 		"/sys/bus/pci/devices/%s", dir_name);
 
-	fail_on(ret < 0, err,
+	fail_on_with_code(ret < 0, err, ret, FPGA_ERR_SOFTWARE_PROBLEM,
 		"Error building the sysfs path for app_pf");
-	fail_on((size_t) ret >= sizeof(sysfs_name), err,
-		"sysfs path too long for app_pf");
+	fail_on_with_code((size_t) ret >= sizeof(sysfs_name), err, ret,
+		FPGA_ERR_SOFTWARE_PROBLEM, "sysfs path too long for app_pf");
 
 	bool done = false;
 	uint32_t retries = 0;
@@ -582,9 +676,10 @@ fpga_pci_check_app_pf_sysfs(char *dir_name, bool exists)
 		ret = stat(sysfs_name, &file_stat);
 		if (!!ret == !exists) {
 			done = true;
-		} else { 
-			fail_on(retries >= F1_CHECK_APP_PF_MAX_RETRIES, err,
-				"exists=%u, failed for path=%s", exists, sysfs_name);
+		} else {
+			fail_on_with_code(retries >= F1_CHECK_APP_PF_MAX_RETRIES, err,
+				ret, FPGA_ERR_UNRESPONSIVE, "exists=%u, failed for path=%s", exists,
+				sysfs_name);
 			if (exists) {
 				ret = fpga_pci_rescan();
 				fail_on(ret, err, "fpga_pci_rescan failed");
@@ -593,102 +688,109 @@ fpga_pci_check_app_pf_sysfs(char *dir_name, bool exists)
 			retries++;
 		}
 	}
-	errno = 0;
-	return 0;
+
+	ret = 0;
 err:
 	errno = 0;
-	return FPGA_ERR_FAIL;
+	return ret;
 }
 
 /**
- * Check that the application PF exists or not based on the app_map and 
+ * Check that the application PF exists or not based on the app_map and
  * exists flag.  If the application PF is supposed to exist but was not
  * found, perform a minimal attempt at recovery be performing a PCI rescan.
- *  
+ *
  * @param[in]	app_map		the application device resource map
- * @param[in]	exists		flag to check existence or non-existence		
- *  
+ * @param[in]	exists		flag to check existence or non-existence
+ *
  * @returns
  *  0   on success, non-zero on error
- */         
+ */
 static int
 fpga_pci_check_app_pf(struct fpga_pci_resource_map *app_map, bool exists)
 {
-	fail_on(!app_map, err, "app_map is NULL");
-		    
+	int ret = 0;
+
+	fail_on_with_code(!app_map, err, ret, FPGA_ERR_SOFTWARE_PROBLEM,
+		"app_map is NULL");
+
 	/** Construct the PCI device directory name using the PCI_DEV_FMT */
 	char dir_name[NAME_MAX + 1];
-	int ret = snprintf(dir_name, sizeof(dir_name), PCI_DEV_FMT,
+	ret = snprintf(dir_name, sizeof(dir_name), PCI_DEV_FMT,
 		app_map->domain, app_map->bus, app_map->dev, app_map->func);
-		    
+
 	fail_on(ret < 0, err, "Error building the dir_name");
 	fail_on((size_t) ret >= sizeof(dir_name), err, "dir_name too long");
 
 	ret = fpga_pci_check_app_pf_sysfs(dir_name, exists);
 	fail_on(ret != 0, err, "fpga_check_app_pf_sysfs failed");
 
-	return 0;
+	ret = 0;
 err:
-	return FPGA_ERR_FAIL;
+	return ret;
 }
 
 /**
  * Remove the application PF for the given app map.
- *  
- * @param[out]  app_map         the application device resource map to remove 
- *  
+ *
+ * @param[out]  app_map         the application device resource map to remove
+ *
  * @returns
  *  0   on success, non-zero on error
- */         
+ */
 static int
 fpga_pci_remove_app_pf(struct fpga_pci_resource_map *app_map)
-{   
-	fail_on(!app_map, err, "app_map is NULL");
-		    
+{
+	int ret = 0;
+	fail_on_with_code(!app_map, err, ret, FPGA_ERR_SOFTWARE_PROBLEM,
+		"app_map is NULL");
+
 	/** Construct the PCI device directory name using the PCI_DEV_FMT */
 	char dir_name[NAME_MAX + 1];
-	int ret = snprintf(dir_name, sizeof(dir_name), PCI_DEV_FMT,
+	ret = snprintf(dir_name, sizeof(dir_name), PCI_DEV_FMT,
 		app_map->domain, app_map->bus, app_map->dev, app_map->func);
-		    
-	fail_on(ret < 0, err, "Error building the dir_name");
-	fail_on((size_t) ret >= sizeof(dir_name), err, "dir_name too long");
+
+	fail_on_with_code(ret < 0, err, ret, FPGA_ERR_SOFTWARE_PROBLEM,
+		"Error building the dir_name");
+	fail_on_with_code((size_t) ret >= sizeof(dir_name), err, ret,
+		FPGA_ERR_SOFTWARE_PROBLEM, "dir_name too long");
 
 	/** Setup the path to the device's remove file */
 	char sysfs_name[NAME_MAX + 1];
 	ret = snprintf(sysfs_name, sizeof(sysfs_name),
 		"/sys/bus/pci/devices/%s/remove", dir_name);
 
-	fail_on(ret < 0, err,
+	fail_on_with_code(ret < 0, err, ret, FPGA_ERR_SOFTWARE_PROBLEM,
 		"Error building the sysfs path for remove file");
-	fail_on((size_t) ret >= sizeof(sysfs_name), err,
-		"sysfs path too long for remove file");
+	fail_on_with_code((size_t) ret >= sizeof(sysfs_name), err, ret,
+		FPGA_ERR_SOFTWARE_PROBLEM, "sysfs path too long for remove file");
 
 	/** Write a "1" to the device's remove file */
 	ret = fpga_pci_write_one2file(sysfs_name);
-	fail_on(ret != 0, err, "cli_write_one2file failed");
-    
-#if 0 
+	fail_on_with_code(ret != 0, err, ret, FPGA_ERR_UNRESPONSIVE,
+		"cli_write_one2file failed");
+
+#if 0
 	/** Check that the app_pf does not exist */
-	/** 
+	/**
 	 * NOTE:
-	 * A concurrent (remove)+rescan action on another FPGA slot will make this 
+	 * A concurrent (remove)+rescan action on another FPGA slot will make this
 	 * FPGA's app_pf visible again, so we should not error out here if we see
-	 * that the app_pf is still present.  
+	 * that the app_pf is still present.
 	 */
 	ret = fpga_pci_check_app_pf_sysfs(dir_name, false); /** exists==false */
 	fail_on(ret != 0, err, "fpga_pci_check_app_pf_sysfs failed");
 #endif
-    
-	errno = 0;
-	return 0;
+
+	ret = 0;
 err:
 	errno = 0;
-	return FPGA_ERR_FAIL;
-}   
+	return ret;
+}
 
-/** 
+/**
  * PCI rescan.
- *  
+ *
  * @returns
  *  0   on success, non-zero on error
  */
@@ -699,26 +801,27 @@ fpga_pci_rescan(void)
 	char sysfs_name[NAME_MAX + 1];
 	int ret = snprintf(sysfs_name, sizeof(sysfs_name), "/sys/bus/pci/rescan");
 
-	fail_on(ret < 0, err,
-			"Error building the sysfs path for PCI rescan file");
-	fail_on((size_t) ret >= sizeof(sysfs_name), err,
-			"sysfs path too long for PCI rescan file");
+	fail_on_with_code(ret < 0, err, ret, FPGA_ERR_SOFTWARE_PROBLEM,
+		"Error building the sysfs path for PCI rescan file");
+	fail_on_with_code((size_t) ret >= sizeof(sysfs_name), err, ret,
+		FPGA_ERR_SOFTWARE_PROBLEM, "sysfs path too long for PCI rescan file");
 
 	/** Write a "1" to the PCI rescan file */
 	ret = fpga_pci_write_one2file(sysfs_name);
-	fail_on(ret != 0, err, "fpga_pci_write_one2file failed");
+	fail_on_with_code(ret != 0, err, ret, FPGA_ERR_UNRESPONSIVE,
+		"fpga_pci_write_one2file failed");
 
-	return 0;
+	ret = 0;
 err:
-	return FPGA_ERR_FAIL;
+	return ret;
 }
 
 int
 fpga_pci_rescan_slot_app_pfs(int slot_id)
 {
 	/** Get the slot spec */
-	struct fpga_slot_spec spec; 
-	int ret = fpga_pci_get_slot_spec(slot_id, &spec); 
+	struct fpga_slot_spec spec;
+	int ret = fpga_pci_get_slot_spec(slot_id, &spec);
 	fail_on(ret != 0, err, "fpga_pci_get_slot_spec failed");
 
 	/** Check if there is a driver attached to the given app_map */
@@ -727,21 +830,21 @@ fpga_pci_rescan_slot_app_pfs(int slot_id)
 	ret = fpga_pci_check_app_pf_driver(app_map, &attached);
 	fail_on(ret != 0, err, "fpga_pci_check_app_pf_driver failed");
 
-	/** Remove the app_pf */ 
-	ret = fpga_pci_remove_app_pf(app_map); 
+	/** Remove the app_pf */
+	ret = fpga_pci_remove_app_pf(app_map);
 	fail_on(ret != 0, err, "fpga_pci_remove_app_pf failed");
 
-	/** 
+	/**
 	 * If we found a driver attached to the given app_map, increase
 	 * the wait time between remove and rescan.
 	 * Note that if the driver takes a long time to complete the
-	 * PCI remove fuction (e.g. longer than the below wait time), 
+	 * PCI remove fuction (e.g. longer than the below wait time),
 	 * we may still fail to expose the changed PCI IDs in the rescan step.
    	 */
-	uint32_t delay_msec = (attached) ?  
+	uint32_t delay_msec = (attached) ?
 		F1_REMOVE_APP_PF_LONG_DELAY_MSEC : F1_REMOVE_APP_PF_SHORT_DELAY_MSEC;
 
-	log_info("Driver for " PCI_DEV_FMT " %s attached, waiting %u msec before rescan", 
+	log_info("Driver for " PCI_DEV_FMT " %s attached, waiting %u msec before rescan",
 		app_map->domain, app_map->bus, app_map->dev, app_map->func,
 		(attached) ? "is" : "is not", delay_msec);
 
@@ -755,7 +858,7 @@ fpga_pci_rescan_slot_app_pfs(int slot_id)
 	ret = fpga_pci_check_app_pf(app_map, true); /** exists==true */
 	fail_on(ret != 0, err, "fpga_pci_check_app_pf failed");
 
-	return 0;
+	ret = 0;
 err:
-	return FPGA_ERR_FAIL;
+	return ret;
 }

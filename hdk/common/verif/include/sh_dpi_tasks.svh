@@ -23,6 +23,15 @@ import tb_type_defines_pkg::*;
    import "DPI-C" context function void  host_memory_putc(input longint unsigned addr, byte data);         // even though a int is used, only the lower 8b are used
    import "DPI-C" context function byte  host_memory_getc(input longint unsigned addr);
 
+`ifdef DMA_TEST
+    `ifdef XILINX_SIMULATOR
+        import "DPI-C" context function send_rdbuf_to_c(input string a);
+    `else
+        import "DPI-C" context task send_rdbuf_to_c(input string a);
+    `endif
+`endif
+
+      
    export "DPI-C" task sv_printf;
    export "DPI-C" task sv_map_host_memory;
    export "DPI-C" task cl_peek;
@@ -31,6 +40,12 @@ import tb_type_defines_pkg::*;
    export "DPI-C" task sv_pause;
    export "DPI-C" task sv_fpga_pci_peek;
    export "DPI-C" task sv_fpga_pci_poke;
+`ifdef DMA_TEST
+   export "DPI-C" task sv_fpga_start_buffer_to_cl;
+   export "DPI-C" task sv_fpga_start_cl_to_buffer;
+`endif
+   export "DPI-C" task init_ddr;
+   export "DPI-C" task deselect_atg_hw;
    
    static int h2c_desc_index = 0;
    static int c2h_desc_index = 0;
@@ -183,6 +198,127 @@ end
       `SLOT_MACRO_TASK(start_dma_to_buffer(chan))
    endfunction
 
+   //DPI task to initialize DDR
+   task init_ddr();
+      power_up(.clk_recipe_a(ClockRecipe::A1),
+                  .clk_recipe_b(ClockRecipe::B0),
+                  .clk_recipe_c(ClockRecipe::C0));
+
+      nsec_delay(1000);
+      poke_stat(.addr(8'h0c), .ddr_idx(0), .data(32'h0000_0000));
+      poke_stat(.addr(8'h0c), .ddr_idx(1), .data(32'h0000_0000));
+      poke_stat(.addr(8'h0c), .ddr_idx(2), .data(32'h0000_0000));
+
+     
+      // allow memory to initialize
+      nsec_delay(27000);
+   endtask // initialize_sh_model
+
+
+   task deselect_atg_hw();
+
+    //de-select the ATG hardware
+
+      poke_ocl(.addr(64'h130), .data(0));
+      poke_ocl(.addr(64'h230), .data(0));
+      poke_ocl(.addr(64'h330), .data(0));
+      poke_ocl(.addr(64'h430), .data(0));
+      nsec_delay(1000);
+   endtask
+
+`ifdef DMA_TEST
+   //DPI task to transfer HOST to CL data.
+   task sv_fpga_start_buffer_to_cl(input int slot_id = 0, int chan, input int buf_size, input longint unsigned wr_buffer_addr, input longint unsigned cl_addr);
+      int timeout_count, status, error_count;
+      logic [63:0] host_memory_buffer_address;
+      logic [63:0] host_memory_ptr;
+
+`ifdef QUESTA_SIM
+      automatic bit debug = 0;
+`else
+      bit debug = 0;
+`endif
+
+      host_memory_ptr = wr_buffer_addr;
+
+      host_memory_buffer_address = 64'h0 + chan*64'h0_0000_3000;
+
+      tb.que_buffer_to_cl(.slot_id(0), .chan(chan), .src_addr(host_memory_buffer_address), .cl_addr(cl_addr), .len(buf_size));
+
+      // Put test pattern in host memory
+      for (int i = 0 ; i < buf_size ; i++) begin
+         tb.hm_put_byte(.addr(host_memory_buffer_address), .d(tb.host_memory_getc(host_memory_ptr)));
+         if(debug) begin
+            $display("[%t] : host_memory_address = %0x wr_buffer[%d] = %0x", $realtime, host_memory_buffer_address, i, tb.host_memory_getc(host_memory_ptr)); 
+         end
+         host_memory_ptr++ ;
+         host_memory_buffer_address++;
+      end
+
+      tb.start_que_to_cl(.slot_id(0), .chan(chan));
+      timeout_count = 0;
+      do begin
+         status[chan] = tb.is_dma_to_cl_done(.chan(chan));
+         #10ns;
+         timeout_count++;
+      end while ((status[chan] != 1) && (timeout_count < 4000)); // UNMATCHED !!
+      
+      if (timeout_count >= 4000) begin
+         $display("[%t] : *** ERROR *** Timeout waiting for dma transfers to cl", $realtime);
+         error_count++;
+      end
+   endtask // sv_fpga_start_buffer_to_cl
+   
+   //DPI task to transfer CL to HOST data.
+   task sv_fpga_start_cl_to_buffer(input int slot_id = 0, input int chan, input int buf_size, input longint unsigned rd_buffer_addr, input longint unsigned cl_addr);
+      int timeout_count, status, error_count;
+      logic [63:0] host_memory_buffer_address;
+      logic [63:0] host_memory_ptr;
+
+`ifdef QUESTA_SIM
+      automatic bit debug = 0;
+`else
+      bit debug = 0;
+`endif
+
+      host_memory_ptr = rd_buffer_addr;
+
+      host_memory_buffer_address = 64'h0 + (chan+1)*64'h0_0001_3000;
+      for (int i = 0 ; i < buf_size ; i++) begin
+         tb.hm_put_byte(.addr(host_memory_buffer_address + i), .d(tb.host_memory_getc(host_memory_ptr)));
+         if(debug) begin
+            $display("[%t] : host_memory_address = %0x rd_buffer[%d] = %0x", $realtime, host_memory_buffer_address + i, i, tb.host_memory_getc(host_memory_ptr)); 
+         end
+         host_memory_ptr++ ;
+      end
+
+
+      tb.que_cl_to_buffer(.slot_id(0), .chan(chan), .dst_addr(host_memory_buffer_address), .cl_addr(cl_addr), .len(buf_size));
+      tb.start_que_to_buffer(.slot_id(0), .chan(chan));
+      timeout_count = 0;
+      do begin
+         status[chan] = tb.is_dma_to_buffer_done(.chan(chan));
+         #10ns;
+         timeout_count++;
+      end while ((status[chan] != 1) && (timeout_count < 4000)); // UNMATCHED !!
+      
+      if (timeout_count >= 4000) begin
+         $display("[%t] : *** ERROR *** Timeout waiting for dma transfers from cl", $realtime);
+         error_count++;
+      end
+
+     host_memory_ptr = rd_buffer_addr;
+     for (int i = 0 ; i < buf_size ; i++) begin
+         tb.host_memory_putc(host_memory_ptr, tb.hm_get_byte(host_memory_buffer_address + i));
+         if(debug) begin
+            $display("[%t] : host_memory_address = %0x rd_buffer[%d] = %0x", $realtime, host_memory_buffer_address + i, i, tb.hm_get_byte(host_memory_buffer_address + i)); 
+         end
+         host_memory_ptr++ ;
+      end
+
+   endtask // sv_fpga_start_cl_to_buffer
+`endif
+   
    task power_up(input int slot_id = 0, 
                        ClockRecipe::A_RECIPE clk_recipe_a = ClockRecipe::A0,
                        ClockRecipe::B_RECIPE clk_recipe_b = ClockRecipe::B0,
@@ -286,6 +422,27 @@ end
                   logic [63:0] strb,     
              logic [5:0] id = 6'h0); 
        `SLOT_MACRO_TASK(poke_pcis(.addr(addr), .data(data), .id(id), .strb(strb)))
+   endtask
+
+   //===========================================================================
+   //
+   // poke_pcis_wc
+   //
+   //   Description: Write combine version of poke (will only work on PCIS Intf)
+   //        id - AXI bus ID
+   //        addr - Address for transfer
+   //        data[$][31:0] - Queue of DWs
+   //        size - AXI size
+   //   Outputs: None
+   //
+   //==========================================================================
+   task poke_pcis_wc(input int slot_id = 0,
+                     input logic [63:0] addr, 
+                     logic [31:0] data [$], 
+                     logic [5:0]  id = 6'h0,
+                     logic [2:0]  size = 3'd6
+                     );
+      `SLOT_MACRO_TASK(poke_pcis_wc(.addr(addr), .data(data), .id(id), .size(size)))
    endtask
 
    //=================================================
@@ -487,6 +644,10 @@ end
       `SLOT_MACRO_FUNC(is_dma_to_cl_done(chan))   
    endfunction // is_dma_to_cl_done
 
+   function int get_ecc_err_cnt(input int slot_id = 0);
+      `SLOT_MACRO_FUNC(get_ecc_err_cnt())   
+   endfunction // is_dma_to_cl_done
+   
    function bit is_dma_to_buffer_done(input int slot_id = 0, input int chan);
       `SLOT_MACRO_FUNC(is_dma_to_buffer_done(chan))
    endfunction // is_dma_to_buffer_done

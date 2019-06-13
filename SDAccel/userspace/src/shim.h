@@ -1,8 +1,5 @@
-#ifndef _XDMA_SHIM_H_
-#define _XDMA_SHIM_H_
-
 /**
- * Copyright (C) 2017 Xilinx, Inc
+ * Copyright (C) 2017-2018 Xilinx, Inc
  * Author: Sonal Santan
  * AWS HAL Driver layered on top of kernel drivers
  *
@@ -20,6 +17,9 @@
  * License for the specific language governing permissions and limitations
  * under the License.
  */
+
+#ifndef _XDMA_SHIM_H_
+#define _XDMA_SHIM_H_
 
 #include "xclhal.h"
 #include "xclperf.h"

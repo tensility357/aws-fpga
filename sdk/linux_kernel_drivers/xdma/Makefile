@@ -1,3 +1,18 @@
+# Amazon FPGA Hardware Development Kit
+#
+# Copyright 2016 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+#
+# Licensed under the Amazon Software License (the "License"). You may not use
+# this file except in compliance with the License. A copy of the License is
+# located at
+#
+#    http://aws.amazon.com/asl/
+#
+# or in the "license" file accompanying this file. This file is distributed on
+# an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, express or
+# implied. See the License for the specific language governing permissions and
+# limitations under the License.
+
 SHELL = /bin/bash
 ifneq ($(xvc_bar_num),)
 	XVC_FLAGS += -D__XVC_BAR_NUM__=$(xvc_bar_num)
@@ -34,6 +49,15 @@ install: all
 	install -m 644 10-xdma.rules /etc/udev/rules.d
 	-rmmod -s xdma || true
 	-modprobe xdma
+
+uninstall:
+	-rm -f /etc/udev/rules.d/10-xdma.rules
+	-rmmod -s xdma || true
+	-rm -f /lib/modules/`uname -r`/extra/xdma.ko
+	depmod -a
+
+# Allow make install and uninstall targets to work without having to set ec2 in the environment.
+noop:
 
 endif
 

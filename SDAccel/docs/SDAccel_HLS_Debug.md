@@ -9,7 +9,7 @@ In some cases, the HLS technology is unable to create an II=1 design, and you ma
 	WARNING: [XOCC 204-69] Unable to schedule 'load' operation ('mem_load_2', /..PATH../MyCode.cl:125) on array 'mem', /..PATH../MyCode.cl:125 due to limited memory ports. Please consider using a memory core with more ports or partitioning the array 'mem'.
 	INFO: [XOCC 204-61] Pipelining result: Target II: 1, Final II: 2, Depth: 42.
 ```
-The message notes that this is **due to limited memory ports** and suggests you **partitioning the array 'mem'**. The is explained in more detail below.
+The message notes that this is **due to limited memory ports** and recommends you **partitioning the array 'mem'**. The is explained in more detail below.
 
 # HLS Backgrounder: Mapping to Block-RAM
 
@@ -78,6 +78,6 @@ For C/C++ kernels, the following directive is used:
 ```
 With these optimizations specified in the C code, the array mem is implemented in 2 Block-RAM and all three sequential values may be accessed in the same clock cycle. This results in a higher performance design. 
 
-[pragma_ref_guide]: https://www.xilinx.com/support/documentation/sw_manuals/xilinx2017_1/ug1253-sdx-pragma-reference.pdf
+[pragma_ref_guide]: https://www.xilinx.com/support/documentation/sw_manuals/xilinx2017_4/ug1253-sdx-pragma-reference.pdf
 
 

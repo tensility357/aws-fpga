@@ -15,10 +15,11 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <stdbool.h>
-
-#include <hal/fpga_common.h>
-#include <fpga_pci.h>
+#include <stddef.h>
+#include "hal/fpga_common.h"
+#include "fpga_pci.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -47,6 +48,14 @@ int fpga_mgmt_close(void);
  * @returns a string corresponding to the provided error code.
  */
 const char *fpga_mgmt_strerror(int err);
+
+/**
+ * Get a longer explanation of an error string.
+ *
+ * @param[in] err  The error code to decode
+ * @returns a string with an explanation of the likely cause of this error.
+ */
+const char *fpga_mgmt_strerror_long(int err);
 
 /**
  * Sets the command timeout value in multiples of the delay_msec value.
@@ -92,7 +101,7 @@ int fpga_mgmt_describe_local_image(int slot_id,
 	struct fpga_mgmt_image_info *info, uint32_t flags);
 
 /**
- * Gets the status of an FPGA. 
+ * Gets the status of an FPGA.
  *
  * Status values are defined in fpga_common.h, see FPGA_STATUS_XYZ.
  * Status qualifier values are defined in fpga_common.h, see FPGA_ERR_XYZ.
@@ -115,7 +124,7 @@ int fpga_mgmt_get_status(int slot_id, int *status, int *status_q);
 const char *fpga_mgmt_get_status_name(int status);
 
 /**
- * Asynchronously clears the specified FPGA image slot, including FPGA 
+ * Asynchronously clears the specified FPGA image slot, including FPGA
  * internal and external memories that are used by the slot.
  *
  * @param[in]  slot_id  the logical slot index
@@ -124,9 +133,9 @@ const char *fpga_mgmt_get_status_name(int status);
 int fpga_mgmt_clear_local_image(int slot_id);
 
 /**
- * Synchronously clears the specified FPGA image slot, including FPGA 
+ * Synchronously clears the specified FPGA image slot, including FPGA
  * internal and external memories that are used by the slot.
- * A user-specified timeout may be specified as: 
+ * A user-specified timeout may be specified as:
  *		timeout (retries) * delay_msec (polling period)
  *
  * @param[in]  slot_id	the logical slot index
@@ -135,7 +144,7 @@ int fpga_mgmt_clear_local_image(int slot_id);
  * @param[in/out]  info	struct to populate with the slot description (or NULL)
  * @returns 0 on success, non-zero on error
  */
-int fpga_mgmt_clear_local_image_sync(int slot_id, 
+int fpga_mgmt_clear_local_image_sync(int slot_id,
 		uint32_t timeout, uint32_t delay_msec,
 		struct fpga_mgmt_image_info *info);
 
@@ -146,36 +155,71 @@ int fpga_mgmt_clear_local_image_sync(int slot_id,
 int fpga_mgmt_load_local_image(int slot_id, char *afi_id);
 
 /**
- * Asynchronously loads the specified FPGA image to the specified slot number.
- *
+ * Wrapper for fpga_mgmt_load_local_image_with_options, passing the slot_id, afi_id,
+ * and flags in the opt structure, with other options set to defaults via
+ * fpga_mgmt_init_load_local_image_options
+*/
+int fpga_mgmt_load_local_image_flags(int slot_id, char *afi_id, uint32_t flags);
+
+/*
  * @param[in]  slot_id  the logical slot index
  * @param[in]  afi_id   The Amazon FGPA Image id to be loaded
  * @param[in]  flags   flags to select various options from Common FPGA
  *                     command flags
- * @returns 0 on success, non-zero on error
- */
-int fpga_mgmt_load_local_image_flags(int slot_id, char *afi_id, uint32_t flags);
+ * @param[in]  clock_mains	Requested values of the main clock, per group.
+				Other clocks in the group will be set to low
+				frequencies.
+*/
+union fpga_mgmt_load_local_image_options {
+	uint8_t reserved[1024];
+	struct {
+		int slot_id;
+		char* afi_id;
+		uint32_t flags;
+		uint32_t clock_mains[FPGA_MMCM_GROUP_MAX];
+	};
+};
+
+int fpga_mgmt_init_load_local_image_options(union fpga_mgmt_load_local_image_options *opt);
 
 /**
- * Wrapper for fpga_mgmt_laod_local_image_sync_flags, with flags set to 0 as a
+ * Asynchronously loads the specified FPGA image to the specified slot number.
+ *
+ * @param[in]  opt	See fpga_mgmt_load_local_image_options
+ * @returns 0 on success, non-zero on error
+ */
+int fpga_mgmt_load_local_image_with_options(union fpga_mgmt_load_local_image_options *opt);
+
+/**
+ * Wrapper for fpga_mgmt_load_local_image_sync_flags, with flags set to 0 as a
  * default.
 */
 int fpga_mgmt_load_local_image_sync(int slot_id, char *afi_id,
 		uint32_t timeout, uint32_t delay_msec,
 		struct fpga_mgmt_image_info *info);
+
 /**
- * Synchronously loads the specified FPGA image slot to the specified slot 
+ * Wrapper for fpga_mgmt_load_local_image_sync_with_options, passing the slot_id, afi_id,
+ * and flags in the opt structure, with other options set to defaults via
+ * fpga_mgmt_init_load_local_image_options
+*/
+int fpga_mgmt_load_local_image_sync_flags(int slot_id, char *afi_id, uint32_t flags,
+		uint32_t timeout, uint32_t delay_msec,
+		struct fpga_mgmt_image_info *info);
+
+/**
+ * Synchronously loads the specified FPGA image slot to the specified slot
  * number.
- * A user-specified timeout may be specified as: 
+ * A user-specified timeout may be specified as:
  *		timeout (retries) * delay_msec (polling period)
  *
- * @param[in]  slot_id	the logical slot index
+ * @param[in]  opt	See fpga_mgmt_load_local_image_options
  * @param[in]  timeout	the timeout retries
  * @param[in]  delay_msec the delay msec between timeout retries
  * @param[in/out]  info	struct to populate with the slot description (or NULL)
  * @returns 0 on success, non-zero on error
  */
-int fpga_mgmt_load_local_image_sync_flags(int slot_id, char *afi_id, uint32_t flags,
+int fpga_mgmt_load_local_image_sync_with_options(union fpga_mgmt_load_local_image_options *opt,
 		uint32_t timeout, uint32_t delay_msec,
 		struct fpga_mgmt_image_info *info);
 

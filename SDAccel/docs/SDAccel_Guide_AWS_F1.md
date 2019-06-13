@@ -42,14 +42,14 @@ Figure: SDAccel Design Flow for Amazon F1
 As described in the [AWS SDAccel README], the SDAccel Development Environment enables the integration of accelerator kernels into a design to be programmed on the AWS F1 FPGA instances. In this section we explain the `xocc` command line options to create the design to be programmed onto the AWS F1 FPGA.
 
 **( A )**
-First and foremost, `xocc` requires the information about the platform it is targeting. On AWS, you must always select the target hardware using `--platform  $AWS_PLATFORM`  The alternative forms are `--platform /PATH/TO/xilinx_aws-vu9p-f1_4ddr-xpr-2pr_4_0` or `--platform xilinx:aws-vu9p-f1:4ddr-xpr-2pr:4.0` if the platform is installed on-premise. The on-premise flow allows you to develop your application on a local machine and execute on the the AWS F1 FPGA instances and is explained in the  [SDAccel On Premise Guide][OnPremiseDev].
+First and foremost, `xocc` requires the information about the platform it is targeting. On AWS, you must always select the target hardware using `--platform  $AWS_PLATFORM`. The on-premise flow allows you to develop your application on a local machine and execute on the the AWS F1 FPGA instances and is explained in the  [SDAccel On Premise Guide][OnPremiseDev].
 
 Furthermore, the `--target` option allows software emulation (sw\_emu), hardware emulation (hw\_emu) or hardware FPGA (hw, default) targets to be created.
 - [Software Emulation target](#sw_emu_target): **Verifies the functional behavior of the host code and kernel operation via pure software execution**
 - [Hardware Emulation target](#hw_emu_target): **Generates custom hardware and confirms kernel(s) performance values via RTL Simulation**
 - [Hardware target](#hw_target): **Implements the RTL hardware for the AWS F1 FPGA and allows confirmation of real-time operation on FPGA**
 
- Further details on the targets are provided in Chapter 4 of [latest SDAccel Environment User Guide].
+ Further details on the targets are provided in Chapter 4 of [SDAccel Environment User Guide].
  
 **( B )**
 The default flow generates a fully compiled design, a Xilinx binary (.xclbin) file, that contains the FPGA bitstream and metadata to be programmed by the host code using the OCL API clCreateProgramWithBinary().  
@@ -65,13 +65,13 @@ For RTL sources, the RTL Kernel Wizard is used to create .xo files. Any RTL kern
 - AXI Master interface(s) for data transfers to/from DDR.
 - AXI-Lite interface for control by the host program.
 
-The RTL Kernel wizard create template RTL files, with legal interfaces, which may be used or modified to create the .xo files. Existing RTL designs must fit into the top-level interface created by RTL Kernel wizard. RTL interface requirements are explained in the [latest SDAccel Environment User Guide] in section "Expressing a kernel in RTL". 
+The RTL Kernel wizard creates template RTL files with legal interfaces. These template RTL files may be used or modified to create the .xo files. Existing RTL designs must fit into the top-level interface created by RTL Kernel wizard. RTL interface requirements are explained in the [SDAccel Environment User Guide] in section "Expressing a kernel in RTL". 
 
 **( D )**
-If `--compile` option is used to create .xo files, the `--link` option allows multiple compiled kernel .xo files to be linked into a single .xclbin executable file. This option is also used to link one or more RTL kernels (packaged .xo file).
+If the `--compile` option is used to create .xo files, the `--link` option allows multiple compiled kernel .xo files to be linked into a single .xclbin executable file. This option is also used to link one or more RTL kernels (packaged .xo file).
 
 **( E )**
-For emulations targets, the Emulation Configuration utility (emconfigutil) is used to link executable with a model of the hardware platform. This utility creates a file named **emconfig.json** which is used by the Xilinx runtime to look-up the platform target during host code execution. This file must be in the same directory as host executable. Refer to the chapter on "Running Software and Hardware Emulation in XOCC Flow" in [latest SDAccel Environment User Guide] for more details on emconfigutil. 
+For emulations targets, the Emulation Configuration utility (emconfigutil) is used to link the executable with a model of the hardware platform. This utility creates a file named **emconfig.json** which is used by the Xilinx runtime to look-up the platform target during host code execution. This file must be in the same directory as host executable. Refer to the chapter on "Running Software and Hardware Emulation in XOCC Flow" in [SDAccel Environment User Guide] for more details on emconfigutil. 
 
 <a name="methodology"></a>
 # Methodology Flow (right hand side of chart)
@@ -89,10 +89,10 @@ Software emulation confirms the functional correctness of the application. It ha
 **( 2 )**
 Iterate around the Software emulation flow to optimize the design and ensure functional correctness.
 - Adapt the host code. Verify how changes in NDrange, work group size or the use of multiple Compute Units impact the performance.
-- Adapt the code targeted to the FPGA for the impact to performance of changes such as, but not limited to, the caching of data, bursting to utilize optimum memory transfers, larger bus bitwidth for the data transfers and alternative micro-architecture explorations. 
+- Adapt the code targeted to the FPGA for the impact to performance of changes such as, but not limited to, the caching of data, bursting to utilize optimum memory transfers, larger bus bit width for the data transfers and alternative micro-architecture explorations. 
 - Continue to verify the functionality after any "host:kernel co-optimization", of the type outlined above, and ensure the optimizations did not modify the intended behavior. 
 
-Refer the [latest SDAccel Environment Optimization Guide] for more details on code optimizations. 
+Refer the [SDAccel Environment Optimization Guide] for more details on code optimizations. 
 
 **( 3 )**
 <a name="hw_emu_target"></a>
@@ -100,9 +100,9 @@ Hardware emulation produces an RTL hardware model for the FPGA which accurately 
 
 This is also where you can review and analyze the custom hardware size (physical area on the FPGA) and performance estimates. Since hardware emulation creates an RTL model of the hardware, expect short-to-medium compile times.
 - Confirm the actual hardware performance estimates through profiling
-- Review the profiling report to analyze the performance of the data transfers and the kernel(s). Details on the profile report are provided in the Profiling Summary Report section of the [latest SDAccel Environment User Guide].
+- Review the profiling report to analyze the performance of the data transfers and the kernel(s). Details on the profile report are provided in the Profiling Summary Report section of the [SDAccel Environment User Guide].
 - Review detailed performance traces to determine performance bottlenecks.
-- Debug hangs or stalls caused by overly optimized buffers, using detailed RTL waveforms. Refer to the Application Timeline section in the [latest SDAccel Environment User Guide]
+- Debug application hangs or stalls by analyzing signal waveform generated from the RTL hardware model. Refer to the Application Timeline section in the [SDAccel Environment User Guide]
 
 **( 4 )**
 Perform different Hardware emulation runs to optimize the hardware or further explore trade-offs.
@@ -134,13 +134,13 @@ The SDAccel Environment accelerates OpenCL Kernels and C/C++ functions by implem
 
 <a name="synth_code"></a>
 ## Synthesizable C Code
-All kernels and functions selected for acceleration must be synthesizable. Full detailed guidelines on synthesizable code are provided in the High-Level Synthesis Coding Styles chapter of the [Vivado HLS User Guide][latest UG902], but in summary:
+All kernels and functions selected for acceleration must be synthesizable. Full detailed guidelines on synthesizable code are provided in the High-Level Synthesis Coding Styles chapter of the [Vivado HLS User Guide][UG902], but in summary:
 
 - None of the functionality can be performed by system calls to the operating system.
 - The C constructs must be of a fixed or bounded size.
 - The implementation of those constructs must be unambiguous.
 
-An example of code which **does not** conform to these guidelines is the Standard Template Library. Many of the functions use dynamic allocation and unbounded recursions to implemet the functionality. For a function to be implemendted in hardware, the sizes need to be fixed and known at compile time, as hardware cannot dynamically change during runtime. It should be understood that some C/C++ functions or OpenCL kernels are **not suitable for implementaiton in hardware**.
+An example of code which **does not** conform to these guidelines is the Standard Template Library. Many of the functions use dynamic allocation and unbounded recursions to implement the functionality. For a function to be implemented in hardware, the sizes need to be fixed and known at compile time, as hardware cannot dynamically change during runtime. It should be understood that some C/C++ functions or OpenCL kernels are **not suitable for implementation in hardware**.
 
 Examples of code which **does** implement well in hardware are video processing algorithms (HEVC, VP8, etc), encryption and compression standards (Gzip,RSA2048), database acceleration algorithms (e.g. SQL) and general mathematic and linear algebra functions (GEMM). 
 
@@ -154,13 +154,13 @@ On the other hand, if the processing on 2M samples is simply to add a constant v
 
 <a name="hls_opt"></a>
 ## Hardware Optimization
-The final aspect to consider when selecting a function to accelerate is whether the function can take advantage of hardware parallism. Custom hardware can execute many operations in parallel and all code generally benefits from hardware pipelining. However, the degree of parallelism which is possible varies. 
+The final aspect to consider when selecting a function to accelerate is whether the function can take advantage of hardware parallelism. Custom hardware can execute many operations in parallel and all code generally benefits from hardware pipelining. However, the degree of parallelism which is possible varies. 
 
-The logic operations expressed in the code will be implemented in parallel, data dependencies permitting. As an example, given 20 operations in the code, hardware will typically be able implement multiple operaiotns per clock cycle and complete in 5-10 clock cycles. 
+The logic operations expressed in the code will be implemented in parallel, data dependencies permitting. As an example, given 20 operations in the code, hardware will typically be able implement multiple operations per clock cycle and complete in 5-10 clock cycles. 
 
-In addition, tasks (loops and sub-functions) present in the code may also be executed in parallel. For example, if one iteration of a loop takes N clock cycles and the loop requires J iterations, it will require N*J clock cycles to complete all operations in the loop. If the loop is pipelined in hardware, it will take N+J+1 interations to complete all operations. If N=10 and J=2 Million, that is 20,000,000 vs 2,000,011. Code which has many seuqnential loops and sub-funcitons benefits from hardware acceleration.
+In addition, tasks (loops and sub-functions) present in the code may also be executed in parallel. For example, if one iteration of a loop takes N clock cycles and the loop requires J iterations, it will require N*J clock cycles to complete all operations in the loop. If the loop is pipelined in hardware, it will take N+J+1 iterations to complete all operations. If N=10 and J=2 Million, that is 20,000,000 vs 2,000,011. Code which has many sequential loops and sub-functions benefits from hardware acceleration.
 
-Conversely, code which is simply a few lines of basic operations, and has no tasks (loops or sub-funcitons) will simply obtain acceleration due to parallel logic functions.
+Conversely, code which is simply a few lines of basic operations, and has no tasks (loops or sub-functions) will simply obtain acceleration due to parallel logic functions.
  
 # Additional Resources
 
@@ -169,12 +169,12 @@ The [AWS SDAccel README].
 Xilinx web portal for [Xilinx SDAccel documentation] and for [Xilinx SDAccel GitHub repository]
 
 
-Links pointing to **2017.1** version of the user guides
-1. [UG1023: SDAccel Environment User Guide][UG1023 2017.1]
-1. [UG1021: SDAccel Environment Tutorial: Getting Started Guide (including emulation/build/running on H/W flow)][UG1021 2017.1]
-1. [UG1207: SDAccel Environment Optimization Guide][UG1207 2017.1]
-1. [UG949: UltraFast Design Methodology Guide for the Vivado Design Suite][UG949 2017.1]
-1. [UG1238: SDx Development Environment Release Notes, Installation, and Licensing Guide][UG1238 2017.1]
+Links pointing to **2017.4** version of the user guides
+1. [UG1023: SDAccel Environment User Guide][UG1023 2017.4]
+1. [UG1021: SDAccel Environment Tutorial: Getting Started Guide (including emulation/build/running on H/W flow)][UG1021 2017.4]
+1. [UG1207: SDAccel Environment Optimization Guide][UG1207 2017.4]
+1. [UG949: UltraFast Design Methodology Guide for the Vivado Design Suite][UG949 2017.4]
+1. [UG1238: SDx Development Environment Release Notes, Installation, and Licensing Guide][UG1238 2017.4]
 
 
 
@@ -182,19 +182,19 @@ Links pointing to **2017.1** version of the user guides
 [VHLS_landing_page]: https://www.xilinx.com/products/design-tools/vivado/integration/esl-design.html
 [Vivado_landing_page]: https://www.xilinx.com/products/design-tools/vivado.html
 
-[latest SDAccel Environment User Guide]: https://www.xilinx.com/cgi-bin/docs/rdoc?v=latest;d=ug1023-sdaccel-user-guide.pdf
-[latest UG1021]: https://www.xilinx.com/cgi-bin/docs/rdoc?v=latest;d=ug1021-sdaccel-intro-tutorial.pdf
-[latest SDAccel Environment Optimization Guide]: https://www.xilinx.com/cgi-bin/docs/rdoc?v=latest;d=ug1207-sdaccel-optimization-guide.pdf
-[latest UG949]: https://www.xilinx.com/cgi-bin/docs/rdoc?v=latest;d=ug949-vivado-design-methodology.pdf
-[latest UG902]: https://www.xilinx.com/cgi-bin/docs/rdoc?v=latest;d=ug902-vivado-high-level-synthesis.pdf
+[SDAccel Environment User Guide]: https://www.xilinx.com/support/documentation/sw_manuals/xilinx2017_4/ug1023-sdaccel-user-guide.pdf
+[UG1021]: https://www.xilinx.com/support/documentation/sw_manuals/xilinx2017_4/ug1021-sdaccel-intro-tutorial.pdf
+[SDAccel Environment Optimization Guide]: https://www.xilinx.com/support/documentation/sw_manuals/xilinx2017_4/ug1207-sdaccel-optimization-guide.pdf
+[UG949]: https://www.xilinx.com/support/documentation/sw_manuals/xilinx2017_4/ug949-vivado-design-methodology.pdf
+[UG902]: https://www.xilinx.com/support/documentation/sw_manuals/xilinx2017_4/ug902-vivado-high-level-synthesis.pdf
 
-[UG1023 2017.1]: https://www.xilinx.com/support/documentation/sw_manuals/xilinx2017_1/ug1023-sdaccel-user-guide.pdf
-[UG1021 2017.1]: https://www.xilinx.com/support/documentation/sw_manuals/xilinx2017_1/ug1021-sdaccel-intro-tutorial.pdf
-[UG1207 2017.1]: https://www.xilinx.com/support/documentation/sw_manuals/xilinx2017_1/ug1207-sdaccel-optimization-guide.pdf
-[UG1238 2017.1]:http://www.xilinx.com/support/documentation/sw_manuals/xilinx2017_1/ug1238-sdx-rnil.pdf
+[UG1023 2017.4]: https://www.xilinx.com/support/documentation/sw_manuals/xilinx2017_4/ug1023-sdaccel-user-guide.pdf
+[UG1021 2017.4]: https://www.xilinx.com/support/documentation/sw_manuals/xilinx2017_4/ug1021-sdaccel-intro-tutorial.pdf
+[UG1207 2017.4]: https://www.xilinx.com/support/documentation/sw_manuals/xilinx2017_4/ug1207-sdaccel-optimization-guide.pdf
+[UG1238 2017.4]:http://www.xilinx.com/support/documentation/sw_manuals/xilinx2017_4/ug1238-sdx-rnil.pdf
 [Xilinx SDAccel documentation]: https://www.xilinx.com/products/design-tools/software-zone/sdaccel.html#documentation
 [Xilinx SDAccel GitHub repository]: https://github.com/Xilinx/SDAccel_Examples
-[UG949 2017.1]: https://www.xilinx.com/support/documentation/sw_manuals/xilinx2017_1/ug949-vivado-design-methodology.pdf
+[UG949 2017.4]: https://www.xilinx.com/support/documentation/sw_manuals/xilinx2017_4/ug949-vivado-design-methodology.pdf
 
 [AWS SDAccel Readme]: ../README.md
 [OnPremiseDev]: ./On_Premises_Development_Steps.md
